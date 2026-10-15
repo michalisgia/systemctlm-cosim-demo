@@ -1,0 +1,92 @@
+diff --git a/hw/core/remote-port-memory-slave.c b/hw/core/remote-port-memory-slave.c
+index f9255fddd7..0916e3ed6d 100644
+--- a/hw/core/remote-port-memory-slave.c
++++ b/hw/core/remote-port-memory-slave.c
+@@ -82,6 +82,9 @@ static AddressSpace *get_as_for_phys_busaccess(RemotePortMemorySlave *s,
+             return iotlb->target_as;
+         }
+     }
++    if (s->phys_addr_bypass) {
++        return &address_space_memory;
++    }
+     /* Emit a warning on errors since this really should not happen. */
+     warn_report("Physical address error detected (range address: 0x%"
+                 HWADDR_PRIx ", len: 0x%" PRIx32 " contains untranslated "
+@@ -200,6 +203,17 @@ static void rp_memory_slave_read(RemotePortDevice *s, struct rp_pkt *pkt)
+                      DMA_DIRECTION_TO_DEVICE);
+ }
+ 
++static bool rp_memory_slave_get_phys_addr_bypass(Object *obj, Error **errp)
++{
++    return REMOTE_PORT_MEMORY_SLAVE(obj)->phys_addr_bypass;
++}
++
++static void rp_memory_slave_set_phys_addr_bypass(Object *obj, bool value,
++                                                 Error **errp)
++{
++    REMOTE_PORT_MEMORY_SLAVE(obj)->phys_addr_bypass = value;
++}
++
+ static void rp_memory_slave_init(Object *obj)
+ {
+     RemotePortMemorySlave *rpms = REMOTE_PORT_MEMORY_SLAVE(obj);
+@@ -216,6 +230,9 @@ static void rp_memory_slave_init(Object *obj)
+                              (Object **)&rpms->ats_cache,
+                              qdev_prop_allow_set_link_before_realize,
+                              OBJ_PROP_LINK_STRONG);
++    object_property_add_bool(obj, "phys-addr-bypass",
++                             rp_memory_slave_get_phys_addr_bypass,
++                             rp_memory_slave_set_phys_addr_bypass);
+ }
+ 
+ static void rp_memory_slave_unrealize(DeviceState *dev)
+diff --git a/hw/core/remote-port-pcie-root-port.c b/hw/core/remote-port-pcie-root-port.c
+index 261e88d282..3995366686 100644
+--- a/hw/core/remote-port-pcie-root-port.c
++++ b/hw/core/remote-port-pcie-root-port.c
+@@ -99,6 +99,12 @@ struct RemotePortPCIERootPort {
+     struct {
+         uint32_t rp_dev;
+         uint32_t nr_devs;
++        /*
++         * Let translated requests (AT = Translated) that were not
++         * translated through remote-port ATS bypass the IOMMU, as for a
++         * device with ATS enabled.
++         */
++        bool ats_translated_bypass;
+     } cfg;
+ 
+     MemoryRegion address_space_io;
+@@ -474,6 +480,8 @@ static void rp_root_port_machine_done(Notifier *notifier, void *data)
+                              &error_abort);
+     object_property_set_link(OBJECT(s->rp_dma), "rp-ats-cache",
+                              OBJECT(s->rp_ats), &error_abort);
++    object_property_set_bool(OBJECT(s->rp_dma), "phys-addr-bypass",
++                             s->cfg.ats_translated_bypass, &error_abort);
+     object_property_set_bool(OBJECT(s->rp_dma), "realized", true, &error_abort);
+ }
+ 
+@@ -562,6 +570,8 @@ static void rp_root_port_init(Object *obj)
+ static Property rp_root_port_properties[] = {
+     DEFINE_PROP_UINT32("rp-chan0", RemotePortPCIERootPort, cfg.rp_dev, 0),
+     DEFINE_PROP_UINT32("nr-devs", RemotePortPCIERootPort, cfg.nr_devs, 21),
++    DEFINE_PROP_BOOL("ats-translated-bypass", RemotePortPCIERootPort,
++                     cfg.ats_translated_bypass, false),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/include/hw/remote-port-memory-slave.h b/include/hw/remote-port-memory-slave.h
+index f0b75f90f4..19a6d29b59 100644
+--- a/include/hw/remote-port-memory-slave.h
++++ b/include/hw/remote-port-memory-slave.h
+@@ -29,5 +29,10 @@ typedef struct RemotePortMemorySlave {
+     MemTxAttrs attr;
+     RemotePortDynPkt rsp;
+     RemotePortATSCache *ats_cache;
++    /*
++     * Physical address (translated) accesses without a matching ATS cache
++     * entry go to address_space_memory instead of failing.
++     */
++    bool phys_addr_bypass;
+ } RemotePortMemorySlave;
+ #endif

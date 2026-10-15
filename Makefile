@@ -102,6 +102,12 @@ VERSAL_NET_CDX_STUB_O = $(VERSAL_NET_CDX_STUB_C:.cc=.o)
 VERSAL_CPM_QDMA_DEMO_C = pcie/versal/cpm-qdma-demo.cc
 VERSAL_CPM4_QDMA_DEMO_O = pcie/versal/cpm4-qdma-demo.o
 VERSAL_CPM5_QDMA_DEMO_O = pcie/versal/cpm5-qdma-demo.o
+TEST_PCIE_INT_BLK_C = pcie/verilog-pcie/test-pcie-int-blk.cc
+TEST_PCIE_INT_BLK_O = $(TEST_PCIE_INT_BLK_C:.cc=.o)
+TEST_EXAMPLE_CORE_PCIE_C = pcie/verilog-pcie/test-example-core-pcie.cc
+TEST_EXAMPLE_CORE_PCIE_O = $(TEST_EXAMPLE_CORE_PCIE_C:.cc=.o)
+VERILOG_PCIE_DEMO_C = pcie/verilog-pcie/verilog-pcie-demo.cc
+VERILOG_PCIE_DEMO_O = $(VERILOG_PCIE_DEMO_C:.cc=.o)
 
 ZYNQ_OBJS += $(ZYNQ_TOP_O)
 ZYNQMP_OBJS += $(ZYNQMP_TOP_O)
@@ -118,6 +124,9 @@ PCIE_ACC_MD5SUM_VFIO_OBJS += $(PCIE_ACC_MD5SUM_VFIO_O)
 VERSAL_NET_CDX_STUB_OBJS += $(VERSAL_NET_CDX_STUB_O)
 VERSAL_CPM4_QDMA_DEMO_OBJS += $(VERSAL_CPM4_QDMA_DEMO_O) $(PCIE_MODEL_O)
 VERSAL_CPM5_QDMA_DEMO_OBJS += $(VERSAL_CPM5_QDMA_DEMO_O) $(PCIE_MODEL_O)
+TEST_PCIE_INT_BLK_OBJS += $(TEST_PCIE_INT_BLK_O)
+TEST_EXAMPLE_CORE_PCIE_OBJS += $(TEST_EXAMPLE_CORE_PCIE_O)
+VERILOG_PCIE_DEMO_OBJS += $(VERILOG_PCIE_DEMO_O)
 
 # Uncomment to enable use of scml2
 # CPPFLAGS += -I $(SCML_INCLUDE)
@@ -250,6 +259,9 @@ PCIE_ATS_DEMO_OBJS += $(OBJS)
 VERSAL_NET_CDX_STUB_OBJS += $(OBJS)
 VERSAL_CPM4_QDMA_DEMO_OBJS += $(OBJS)
 VERSAL_CPM5_QDMA_DEMO_OBJS += $(OBJS)
+TEST_PCIE_INT_BLK_OBJS += $(OBJS)
+TEST_EXAMPLE_CORE_PCIE_OBJS += $(OBJS)
+VERILOG_PCIE_DEMO_OBJS += $(OBJS)
 
 TARGET_ZYNQ_DEMO = zynq_demo
 TARGET_ZYNQMP_DEMO = zynqmp_demo
@@ -266,6 +278,9 @@ TARGET_VERSAL_NET_CDX_STUB = versal_net_cdx_stub
 PCIE_ACC_MD5SUM_VFIO = pcie-ats-demo/pcie-acc-md5sum-vfio
 TARGET_VERSAL_CPM4_QDMA_DEMO = pcie/versal/cpm4-qdma-demo
 TARGET_VERSAL_CPM5_QDMA_DEMO = pcie/versal/cpm5-qdma-demo
+TARGET_TEST_PCIE_INT_BLK = pcie/verilog-pcie/test-pcie-int-blk
+TARGET_TEST_EXAMPLE_CORE_PCIE = pcie/verilog-pcie/test-example-core-pcie
+TARGET_VERILOG_PCIE_DEMO = pcie/verilog-pcie/verilog-pcie-demo
 
 IPXACT_LIBS = packages/ipxact
 DEMOS_IPXACT_LIB = $(IPXACT_LIBS)/xilinx.com/demos
@@ -339,6 +354,9 @@ all: $(TARGETS)
 -include $(PCIE_ACC_MD5SUM_VFIO_OBJS:.o=.d)
 -include $(VERSAL_CPM4_QDMA_DEMO_OBJS:.o=.d)
 -include $(VERSAL_CPM5_QDMA_DEMO_OBJS:.o=.d)
+-include $(TEST_PCIE_INT_BLK_OBJS:.o=.d)
+-include $(TEST_EXAMPLE_CORE_PCIE_OBJS:.o=.d)
+-include $(VERILOG_PCIE_DEMO_OBJS:.o=.d)
 CFLAGS += -MMD
 CXXFLAGS += -MMD
 
@@ -465,6 +483,127 @@ $(TARGET_VERSAL_CPM4_QDMA_DEMO): LDLIBS += libpcie.a
 $(TARGET_VERSAL_CPM4_QDMA_DEMO): $(VERSAL_CPM4_QDMA_DEMO_OBJS) libpcie.a
 	$(CXX) $(LDFLAGS) -o $@ $(VERSAL_CPM4_QDMA_DEMO_OBJS) $(LDLIBS)
 
+$(TARGET_TEST_PCIE_INT_BLK): $(TEST_PCIE_INT_BLK_OBJS)
+	$(CXX) $(LDFLAGS) -o $@ $(TEST_PCIE_INT_BLK_OBJS) $(LDLIBS)
+
+## verilog-pcie example design ##
+#
+# example_core_pcie from the verilog-pcie submodule (a fork of
+# https://github.com/alexforencich/verilog-pcie), Verilated in C++ mode
+# (independent of HAVE_VERILOG_VERILATOR).
+#
+VERILOG_PCIE_DIR ?= verilog-pcie
+VPCIE_VERILATOR ?= verilator
+VPCIE_VERILATOR_ROOT ?= $(shell $(VPCIE_VERILATOR) --getenv VERILATOR_ROOT 2>/dev/null)
+VPCIE_OBJ_DIR = obj_dir_vpcie
+VPCIE_RTL = $(VERILOG_PCIE_DIR)/rtl
+VPCIE_EX_RTL = $(VERILOG_PCIE_DIR)/example/Alveo/fpga/rtl/common
+
+#
+# AT chicken bit (rtl/at-chicken-bit.patch): DMA descriptor tag bit 8 set
+# sends untranslated requests (AT = 00, virtual addresses), clear sends
+# translated requests (AT = 10, physical addresses). The patch is applied to
+# copies of the upstream files in $(VPCIE_OBJ_DIR)/rtl/.
+# VPCIE_AT_CHICKEN_BIT=0 builds the unmodified upstream RTL (AT = 00 always).
+#
+VPCIE_AT_CHICKEN_BIT ?= 1
+VPCIE_PATCH = pcie/verilog-pcie/rtl/at-chicken-bit.patch
+VPCIE_PATCH_SRCS = $(VPCIE_EX_RTL)/example_core_pcie.v
+VPCIE_PATCH_SRCS += $(VPCIE_EX_RTL)/example_core.v
+VPCIE_PATCH_SRCS += $(VPCIE_RTL)/dma_if_pcie_rd.v
+VPCIE_PATCH_SRCS += $(VPCIE_RTL)/dma_if_pcie_wr.v
+ifeq "$(VPCIE_AT_CHICKEN_BIT)" "1"
+VPCIE_PATCHED = $(addprefix $(VPCIE_OBJ_DIR)/rtl/,$(notdir $(VPCIE_PATCH_SRCS)))
+else
+VPCIE_PATCHED = $(VPCIE_PATCH_SRCS)
+endif
+
+VPCIE_SRCS = $(VPCIE_PATCHED)
+VPCIE_SRCS += $(VPCIE_EX_RTL)/axi_ram.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_axil_master.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_axi_master.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_axi_master_rd.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_axi_master_wr.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_tlp_demux_bar.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_tlp_demux.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_tlp_mux.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_tlp_fifo.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_tlp_fifo_raw.v
+VPCIE_SRCS += $(VPCIE_RTL)/pcie_msix.v
+VPCIE_SRCS += $(VPCIE_RTL)/dma_if_pcie.v
+VPCIE_SRCS += $(VPCIE_RTL)/dma_psdpram.v
+VPCIE_SRCS += $(VPCIE_RTL)/priority_encoder.v
+VPCIE_SRCS += $(VPCIE_RTL)/pulse_merge.v
+
+VPCIE_LIB = $(VPCIE_OBJ_DIR)/Vexample_core_pcie__ALL.a
+VPCIE_VERILATED_O = $(VPCIE_OBJ_DIR)/verilated.o
+VPCIE_VERILATED_O += $(VPCIE_OBJ_DIR)/verilated_threads.o
+VPCIE_CPPFLAGS = -I pcie/verilog-pcie -I $(VPCIE_OBJ_DIR)
+VPCIE_CPPFLAGS += -I $(VPCIE_VERILATOR_ROOT)/include
+VPCIE_CPPFLAGS += -I $(VPCIE_VERILATOR_ROOT)/include/vltstd
+VPCIE_VFLAGS = --cc -Wno-fatal -Wno-lint -Wno-style
+
+#
+# FST waveform tracing of the whole RTL hierarchy, enabled at run time with
+# +trace (see verilog-pcie-demo.md). VPCIE_TRACE=0 builds without it.
+#
+VPCIE_TRACE ?= 1
+ifeq "$(VPCIE_TRACE)" "1"
+VPCIE_VFLAGS += --trace-fst --trace-structs --trace-params --trace-underscore
+# TLP monitors bound into the core, decode the headers into structs
+VPCIE_SRCS := pcie/verilog-pcie/rtl/pcie_tlp_pkg.sv $(VPCIE_SRCS)
+VPCIE_SRCS += pcie/verilog-pcie/rtl/example_core_pcie_tlp_mon.sv
+VPCIE_CPPFLAGS += -DVM_TRACE=1 -DVM_TRACE_FST=1
+VPCIE_VERILATED_O += $(VPCIE_OBJ_DIR)/verilated_fst_c.o
+VPCIE_LDLIBS = -lz
+endif
+
+# Re-Verilate when the flags or the source list change
+$(VPCIE_OBJ_DIR)/vflags: FORCE
+	@mkdir -p $(VPCIE_OBJ_DIR)
+	@echo '$(VPCIE_VFLAGS) $(VPCIE_SRCS)' | cmp -s - $@ || \
+		echo '$(VPCIE_VFLAGS) $(VPCIE_SRCS)' > $@
+
+FORCE:
+
+$(VPCIE_OBJ_DIR)/rtl/.patched: $(VPCIE_PATCH_SRCS) $(VPCIE_PATCH)
+	rm -rf $(VPCIE_OBJ_DIR)/rtl
+	mkdir -p $(VPCIE_OBJ_DIR)/rtl
+	cp $(VPCIE_PATCH_SRCS) $(VPCIE_OBJ_DIR)/rtl/
+	patch -s -d $(VPCIE_OBJ_DIR)/rtl -p1 < $(VPCIE_PATCH)
+	touch $@
+
+$(addprefix $(VPCIE_OBJ_DIR)/rtl/,$(notdir $(VPCIE_PATCH_SRCS))): $(VPCIE_OBJ_DIR)/rtl/.patched
+
+$(VPCIE_LIB): $(VPCIE_SRCS) $(VPCIE_OBJ_DIR)/vflags
+	$(VPCIE_VERILATOR) $(VPCIE_VFLAGS) --build -j 4 \
+		--top-module example_core_pcie -Mdir $(VPCIE_OBJ_DIR) \
+		-CFLAGS "$(C_OPTIMIZE)" $(VPCIE_SRCS)
+
+$(VPCIE_OBJ_DIR)/verilated_fst_c.o: $(VPCIE_VERILATOR_ROOT)/include/verilated_fst_c.cpp $(VPCIE_LIB)
+	$(CXX) $(CXXFLAGS) $(VPCIE_CPPFLAGS) -c -o $@ $<
+
+$(VPCIE_OBJ_DIR)/verilated.o: $(VPCIE_VERILATOR_ROOT)/include/verilated.cpp $(VPCIE_LIB)
+	$(CXX) $(CXXFLAGS) $(VPCIE_CPPFLAGS) -c -o $@ $<
+
+$(VPCIE_OBJ_DIR)/verilated_threads.o: $(VPCIE_VERILATOR_ROOT)/include/verilated_threads.cpp $(VPCIE_LIB)
+	$(CXX) $(CXXFLAGS) $(VPCIE_CPPFLAGS) -c -o $@ $<
+
+# Explicit, -MMD is lost when CXXFLAGS is set on the command line
+VPCIE_HDRS = $(wildcard pcie/verilog-pcie/*.h)
+VPCIE_HDRS += libsystemctlm-soc/tlm-bridges/tlm2tlp-bridge.h
+VPCIE_HDRS += $(wildcard libsystemctlm-soc/soc/pci/core/*.h)
+$(TEST_PCIE_INT_BLK_O) $(TEST_EXAMPLE_CORE_PCIE_O) $(VERILOG_PCIE_DEMO_O): $(VPCIE_HDRS)
+
+$(TEST_EXAMPLE_CORE_PCIE_O) $(VERILOG_PCIE_DEMO_O): CPPFLAGS += $(VPCIE_CPPFLAGS)
+$(TEST_EXAMPLE_CORE_PCIE_O) $(VERILOG_PCIE_DEMO_O): $(VPCIE_LIB)
+
+$(TARGET_TEST_EXAMPLE_CORE_PCIE): $(TEST_EXAMPLE_CORE_PCIE_OBJS) $(VPCIE_LIB) $(VPCIE_VERILATED_O)
+	$(CXX) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(VPCIE_LDLIBS)
+
+$(TARGET_VERILOG_PCIE_DEMO): $(VERILOG_PCIE_DEMO_OBJS) $(VPCIE_LIB) $(VPCIE_VERILATED_O)
+	$(CXX) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(VPCIE_LDLIBS)
+
 verilated_%.o: $(VERILATOR_ROOT)/include/verilated_%.cpp
 
 clean:
@@ -489,6 +628,13 @@ clean:
 	$(RM) $(TARGET_VERSAL_NET_CDX_STUB)
 	$(RM) $(TARGET_VERSAL_CPM5_QDMA_DEMO) $(VERSAL_CPM5_QDMA_DEMO_OBJS)
 	$(RM) $(VERSAL_CPM5_QDMA_DEMO_OBJS:.o=.d)
+	$(RM) $(TARGET_TEST_PCIE_INT_BLK) $(TEST_PCIE_INT_BLK_OBJS)
+	$(RM) $(TEST_PCIE_INT_BLK_OBJS:.o=.d)
+	$(RM) $(TARGET_TEST_EXAMPLE_CORE_PCIE) $(TEST_EXAMPLE_CORE_PCIE_OBJS)
+	$(RM) $(TEST_EXAMPLE_CORE_PCIE_OBJS:.o=.d)
+	$(RM) $(TARGET_VERILOG_PCIE_DEMO) $(VERILOG_PCIE_DEMO_OBJS)
+	$(RM) $(VERILOG_PCIE_DEMO_OBJS:.o=.d)
+	$(RM) -r $(VPCIE_OBJ_DIR)
 	$(RM) $(TARGET_VERSAL_CPM4_QDMA_DEMO) $(VERSAL_CPM4_QDMA_DEMO_OBJS)
 	$(RM) $(VERSAL_CPM4_QDMA_DEMO_OBJS:.o=.d)
 	$(RM) -r libpcie libpcie.a

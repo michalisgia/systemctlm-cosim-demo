@@ -10,3 +10,6 @@
 [submodule "pcie-model"]
 	path = pcie-model
 	url = https://github.com/Xilinx/pcie-model.git
+[submodule "verilog-pcie"]
+	path = verilog-pcie
+	url = ../verilog-pcie.git

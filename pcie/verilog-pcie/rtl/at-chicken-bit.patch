@@ -1,0 +1,166 @@
+AT chicken bit for the verilog-pcie example design (applied by the Makefile to
+copies of the upstream files in obj_dir_vpcie/rtl/, see verilog-pcie-demo.md).
+
+DMA descriptor tag bit 8 selects the AT field of the DMA engine's TLPs:
+set (e.g. tag 0x1AA): virtual address, untranslated request (AT = 00),
+clear (e.g. tag 0xAA): physical address, translated request (AT = 10).
+
+--- a/example_core_pcie.v
++++ b/example_core_pcie.v
+@@ -202,7 +202,8 @@
+ 
+ parameter PCIE_ADDR_WIDTH = 64;
+ parameter DMA_LEN_WIDTH = 16;
+-parameter DMA_TAG_WIDTH = 8;
++// 16 bits (was 8): bit 8 is the AT chicken bit, see dma_if_pcie_rd.v
++parameter DMA_TAG_WIDTH = 16;
+ 
+ parameter IRQ_INDEX_WIDTH = 5;
+ 
+--- a/example_core.v
++++ b/example_core.v
+@@ -601,7 +601,8 @@
+                 dma_read_desc_ram_addr_next = dma_read_block_ram_base_addr_reg + (dma_read_block_ram_offset_reg & dma_read_block_ram_offset_mask_reg);
+                 dma_read_desc_len_next = dma_read_block_len_reg;
+                 dma_read_block_count_next = dma_read_block_count_reg - 1;
+-                dma_read_desc_tag_next = dma_read_block_count_reg;
++                // set tag bit 8: untranslated request (AT chicken bit)
++                dma_read_desc_tag_next = dma_read_block_count_reg | 32'h100;
+                 dma_read_desc_valid_next = 1'b1;
+             end
+         end
+@@ -624,7 +625,8 @@
+                 dma_write_desc_imm_en_next = 1'b0;
+                 dma_write_desc_len_next = dma_write_block_len_reg;
+                 dma_write_block_count_next = dma_write_block_count_reg - 1;
+-                dma_write_desc_tag_next = dma_write_block_count_reg;
++                // set tag bit 8: untranslated request (AT chicken bit)
++                dma_write_desc_tag_next = dma_write_block_count_reg | 32'h100;
+                 dma_write_desc_valid_next = 1'b1;
+             end
+         end
+--- a/dma_if_pcie_rd.v
++++ b/dma_if_pcie_rd.v
+@@ -193,6 +193,13 @@
+ parameter PCIE_TAG_WIDTH_2 = $clog2(PCIE_TAG_COUNT_2);
+ 
+ parameter OP_TAG_WIDTH = $clog2(OP_TABLE_SIZE);
++
++// AT chicken bit: descriptor tag bit AT_TAG_BIT selects the TLP AT field,
++// set: virtual address, untranslated request (AT = 00, the IOMMU
++// translates it), clear: physical address, translated request (AT = 10).
++// Without the bit in the tag (TAG_WIDTH <= AT_TAG_BIT) AT stays 00.
++parameter AT_TAG_BIT = 8;
++
+ parameter OP_TABLE_READ_COUNT_WIDTH = PCIE_TAG_WIDTH+1;
+ 
+ parameter TX_COUNT_WIDTH = $clog2(TX_LIMIT+1);
+@@ -325,6 +332,7 @@
+ reg [RAM_ADDR_WIDTH-1:0] req_ram_addr_reg = {RAM_ADDR_WIDTH{1'b0}}, req_ram_addr_next;
+ reg [LEN_WIDTH-1:0] req_op_count_reg = {LEN_WIDTH{1'b0}}, req_op_count_next;
+ reg req_zero_len_reg = 1'b0, req_zero_len_next;
++reg [1:0] req_at_reg = 2'b00, req_at_next;
+ reg [OP_TAG_WIDTH-1:0] req_op_tag_reg = {OP_TAG_WIDTH{1'b0}}, req_op_tag_next;
+ reg req_op_tag_valid_reg = 1'b0, req_op_tag_valid_next;
+ reg [PCIE_TAG_WIDTH-1:0] req_pcie_tag_reg = {PCIE_TAG_WIDTH{1'b0}}, req_pcie_tag_next;
+@@ -640,6 +648,7 @@
+     req_ram_addr_next = req_ram_addr_reg;
+     req_op_count_next = req_op_count_reg;
+     req_zero_len_next = req_zero_len_reg;
++    req_at_next = req_at_reg;
+     req_op_tag_next = req_op_tag_reg;
+     req_op_tag_valid_next = req_op_tag_valid_reg;
+     req_pcie_tag_next = req_pcie_tag_reg;
+@@ -763,7 +772,7 @@
+     tlp_hdr[111] = 1'b0; // TD
+     tlp_hdr[110] = 1'b0; // EP
+     tlp_hdr[109:108] = 2'b00; // attr
+-    tlp_hdr[107:106] = 3'b000; // AT
++    tlp_hdr[107:106] = req_at_reg; // AT
+     tlp_hdr[105:96] = req_dword_count; // length
+     // DW 1
+     tlp_hdr[95:80] = requester_id; // requester ID
+@@ -791,6 +800,11 @@
+                 s_axis_read_desc_ready_next = 1'b0;
+                 req_ram_sel_next = s_axis_read_desc_ram_sel;
+                 req_pcie_addr_next = s_axis_read_desc_pcie_addr;
++                if (TAG_WIDTH > AT_TAG_BIT && !s_axis_read_desc_tag[AT_TAG_BIT % TAG_WIDTH]) begin
++                    req_at_next = 2'b10;
++                end else begin
++                    req_at_next = 2'b00;
++                end
+                 req_ram_addr_next = s_axis_read_desc_ram_addr;
+                 if (s_axis_read_desc_len == 0) begin
+                     // zero-length operation
+@@ -1405,6 +1419,7 @@
+     req_ram_addr_reg <= req_ram_addr_next;
+     req_op_count_reg <= req_op_count_next;
+     req_zero_len_reg <= req_zero_len_next;
++    req_at_reg <= req_at_next;
+     req_op_tag_reg <= req_op_tag_next;
+     req_op_tag_valid_reg <= req_op_tag_valid_next;
+     req_pcie_tag_reg <= req_pcie_tag_next;
+--- a/dma_if_pcie_wr.v
++++ b/dma_if_pcie_wr.v
+@@ -177,6 +177,12 @@
+ 
+ parameter OP_TAG_WIDTH = $clog2(OP_TABLE_SIZE);
+ 
++// AT chicken bit: descriptor tag bit AT_TAG_BIT selects the TLP AT field,
++// set: virtual address, untranslated request (AT = 00, the IOMMU
++// translates it), clear: physical address, translated request (AT = 10).
++// Without the bit in the tag (TAG_WIDTH <= AT_TAG_BIT) AT stays 00.
++parameter AT_TAG_BIT = 8;
++
+ parameter TX_COUNT_WIDTH = $clog2(TX_LIMIT+1);
+ 
+ // bus width assertions
+@@ -298,6 +304,7 @@
+ reg tlp_imm_en_reg = 1'b0, tlp_imm_en_next;
+ reg [11:0] tlp_len_reg = 12'd0, tlp_len_next;
+ reg tlp_zero_len_reg = 1'b0, tlp_zero_len_next;
++reg [1:0] tlp_at_reg = 2'b00, tlp_at_next;
+ reg [RAM_OFFSET_WIDTH-1:0] offset_reg = {RAM_OFFSET_WIDTH{1'b0}}, offset_next;
+ reg [9:0] dword_count_reg = 10'd0, dword_count_next;
+ reg [RAM_SEG_COUNT-1:0] ram_mask_reg = {RAM_SEG_COUNT{1'b0}}, ram_mask_next;
+@@ -816,6 +823,7 @@
+     tlp_imm_en_next = tlp_imm_en_reg;
+     tlp_len_next = tlp_len_reg;
+     tlp_zero_len_next = tlp_zero_len_reg;
++    tlp_at_next = tlp_at_reg;
+     dword_count_next = dword_count_reg;
+     offset_next = offset_reg;
+     ram_mask_next = ram_mask_reg;
+@@ -857,7 +865,7 @@
+     tlp_hdr[111] = 1'b0; // TD
+     tlp_hdr[110] = 1'b0; // EP
+     tlp_hdr[109:108] = 2'b00; // attr
+-    tlp_hdr[107:106] = 3'b000; // AT
++    tlp_hdr[107:106] = tlp_at_reg; // AT
+     tlp_hdr[105:96] = dword_count_reg; // length
+     // DW 1
+     tlp_hdr[95:80] = requester_id; // requester ID
+@@ -889,6 +897,7 @@
+             tlp_imm_en_next = op_table_imm_en[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+             tlp_len_next = op_table_len[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+             tlp_zero_len_next = op_table_zero_len[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
++            tlp_at_next = (TAG_WIDTH > AT_TAG_BIT && !op_table_tag[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]][AT_TAG_BIT % TAG_WIDTH]) ? 2'b10 : 2'b00;
+             dword_count_next = op_table_dword_len[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+             offset_next = op_table_offset[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+             cycle_count_next = op_table_cycle_count[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+@@ -947,6 +956,7 @@
+                     tlp_imm_en_next = op_table_imm_en[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+                     tlp_len_next = op_table_len[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+                     tlp_zero_len_next = op_table_zero_len[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
++                    tlp_at_next = (TAG_WIDTH > AT_TAG_BIT && !op_table_tag[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]][AT_TAG_BIT % TAG_WIDTH]) ? 2'b10 : 2'b00;
+                     dword_count_next = op_table_dword_len[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+                     offset_next = op_table_offset[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+                     cycle_count_next = op_table_cycle_count[op_table_tx_start_ptr_reg[OP_TAG_WIDTH-1:0]];
+@@ -1056,6 +1066,7 @@
+     tlp_imm_en_reg <= tlp_imm_en_next;
+     tlp_len_reg <= tlp_len_next;
+     tlp_zero_len_reg <= tlp_zero_len_next;
++    tlp_at_reg <= tlp_at_next;
+     dword_count_reg <= dword_count_next;
+     offset_reg <= offset_next;
+     ram_mask_reg <= ram_mask_next;

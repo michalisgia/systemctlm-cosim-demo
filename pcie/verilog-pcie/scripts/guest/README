@@ -1,0 +1,71 @@
+verilog-pcie example end-point tests (installed in /opt/vpcie-tests)
+=====================================================================
+
+The guest boots the generic kernel with "intel_iommu=on
+iommu.passthrough=0": the IOMMU is always on and translates the DMA of
+every device (kernel drivers get IOVAs from the DMA API, devices bound to
+vfio-pci get their own IO address space).
+
+AT chicken bit: bit 8 of the DMA descriptor tag selects the PCIe Address
+Type of the end-point's DMA requests (pcie/verilog-pcie/rtl/at-chicken-bit.patch):
+
+  tag 0x1AA (bit 8 set)    virtual address / IOVA, untranslated request
+                           (AT = 00), translated by the IOMMU
+  tag 0x0AA (bit 8 clear)  physical address, translated request (AT = 10),
+                           bypasses the IOMMU (QEMU root port
+                           ats-translated-bypass=on, see run-demo.sh)
+
+All commands need root (sudo -i). The device is 02:00.0 (1234:0001).
+
+  vpcie-bind.sh show             current driver / IOMMU group / cmdline
+
+Physical addresses, translated requests (AT = 10)
+-------------------------------------------------
+  vpcie-bind.sh none
+  vpcie-phys-dma-test [-v] [-u] [--no-fault] [-s SEED]
+
+  Maps the BARs through sysfs and DMAs to a locked buffer using physical
+  addresses from /proc/self/pagemap, tags without the chicken bit. Then
+  checks that the IOMMU blocks the same physical address in an
+  untranslated request (read completed with UR, write dropped, DMAR fault
+  in dmesg). -u uses untranslated requests for the copies (only works
+  without IOMMU or with iommu=pt).
+
+Virtual addresses through the IOMMU, untranslated requests (AT = 00, VFIO)
+--------------------------------------------------------------------------
+  vpcie-bind.sh vfio
+  vpcie-vfio-dma-test [-v] [--iova ADDR] [--pages N] [--no-irq] [--no-fault]
+
+  Maps a buffer into the device's IO address space at IOVA == its virtual
+  address (or --iova), DMAs with the chicken bit set across page
+  boundaries (contiguous IOVAs, scattered physical pages), checks MSI-X
+  interrupts through VFIO eventfds and that DMA to an unmapped IOVA is
+  blocked (UR / dropped, DMAR fault in dmesg). Virtual-address IOVAs need
+  QEMU's intel-iommu with aw-bits=48 (run-demo.sh sets it); with 39 bits
+  use e.g. --iova 0x10000000.
+
+Kernel driver (IOVAs from the DMA API, untranslated requests)
+-------------------------------------------------------------
+  vpcie-bind.sh edev
+
+  Loads driver/example.ko (verilog-pcie example driver, its tags patched
+  with the chicken bit, built for the installed generic kernel, rebuild
+  with: make -C driver). It runs its own DMA tests and MSI-X interrupts on
+  probe, see dmesg. The benchmarks that follow take long in co-simulation
+  and stop at the driver's 20 s timeout ("operation timed out"), the
+  functional tests before them are the interesting part ("test data
+  matches", 3x "Interrupt"). The block-mode benchmarks always send
+  untranslated requests.
+
+Sources
+-------
+  vpcie.c / vpcie.h            shared code: register map, DMA, copy tests
+  vpcie-phys-dma-test.c        sysfs + pagemap
+  vpcie-vfio-dma-test.c        VFIO
+  make                         rebuilds both
+
+Updating the tests
+------------------
+  On the host after changing pcie/verilog-pcie/scripts/guest/:
+    pcie/verilog-pcie/scripts/make-guest-image.py --update \
+        --qemu <qemu> --user-data <user-data.img> --out <image>

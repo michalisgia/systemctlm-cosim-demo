@@ -3,3 +3,11 @@
 *_demo
 .config.mk
 trace.vcd
+pcie/verilog-pcie/*.fst
+pcie/verilog-pcie/scripts/guest/vpcie-phys-dma-test
+pcie/verilog-pcie/scripts/guest/vpcie-vfio-dma-test
+obj_dir_vpcie/
+pcie/verilog-pcie/verilog-pcie-demo
+pcie/verilog-pcie/test-example-core-pcie
+pcie/verilog-pcie/test-pcie-int-blk
+pcie/verilog-pcie/*.log
